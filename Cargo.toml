@@ -1,0 +1,47 @@
+[package]
+name = "swervy"
+version = "0.1.0"
+authors = ["Patrick Brennan <brennanpatrick20@gmail.com>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+embassy-embedded-hal = "0.2.0"
+embassy-executor = { version = "0.6.0", features = ["task-arena-size-40960"] }
+embassy-net = { version = "0.4.0", features = ["tcp", "udp", "dhcpv4", "medium-ethernet"] }
+embassy-sync = "0.6.0"
+embassy-time = "0.3.2"
+embassy-time-driver = "0.1.0"
+embedded-hal = "1.0.0"
+embedded-hal-async = "1.0.0"
+esp-alloc = "0.5.0"
+esp-backtrace = { version = "0.14.2", features = [
+    "esp32s3",
+    "exception-handler",
+    "panic-handler",
+    "println",
+] }
+esp-hal = { version = "0.21.0", features = [ "esp32s3" ] }
+esp-hal-embassy = { version = "0.4.0", features = ["esp32s3", "integrated-timers"] }
+esp-println = { version = "0.12.0", features = ["esp32s3", "log"] }
+esp-wifi = { version = "0.10.1", features = ["esp32s3", "esp-alloc", "wifi-default", "wifi", "async", "embassy-net", "utils", "phy-enable-usb"] }
+fugit = "0.3.7"
+log = { version = "0.4.22" }
+static_cell = "2.1.0"
+
+[profile.dev.package.esp-wifi]
+opt-level = 3
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = 's'
+
+[profile.release]
+codegen-units = 1 # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false
