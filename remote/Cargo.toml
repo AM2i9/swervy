@@ -22,7 +22,6 @@ esp-wifi = { version = "0.10.1", features = [
     "phy-enable-usb"
 ] }
 heapless = { version = "0.8.0", default-features = false }
-pscontroller-rs = { git = "https://github.com/AM2i9/pscontroller-rs.git" }
 embedded-hal = "1.0.0"
 
 [profile.dev]
