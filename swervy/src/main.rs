@@ -85,28 +85,28 @@ async fn main(spawner: Spawner) -> ! {
         })
         .unwrap();
 
-    let mut channel0 = ledc.get_channel(ledc::channel::Number::Channel0, io.pins.gpio4);
+    let mut channel0 = ledc.get_channel(ledc::channel::Number::Channel0, io.pins.gpio3);
     let mut motor0 = BrushlessESC::new(&mut channel0, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel1 = ledc.get_channel(ledc::channel::Number::Channel1, io.pins.gpio5);
+    let mut channel1 = ledc.get_channel(ledc::channel::Number::Channel1, io.pins.gpio8);
     let mut motor1 = BrushlessESC::new(&mut channel1, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel2 = ledc.get_channel(ledc::channel::Number::Channel2, io.pins.gpio6);
+    let mut channel2 = ledc.get_channel(ledc::channel::Number::Channel2, io.pins.gpio18);
     let mut motor2 = BrushlessESC::new(&mut channel2, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel3 = ledc.get_channel(ledc::channel::Number::Channel3, io.pins.gpio7);
+    let mut channel3 = ledc.get_channel(ledc::channel::Number::Channel3, io.pins.gpio15);
     let mut motor3 = BrushlessESC::new(&mut channel3, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel4 = ledc.get_channel(ledc::channel::Number::Channel4, io.pins.gpio15);
+    let mut channel4 = ledc.get_channel(ledc::channel::Number::Channel4, io.pins.gpio7);
     let mut motor4 = BrushlessESC::new(&mut channel4, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel5 = ledc.get_channel(ledc::channel::Number::Channel5, io.pins.gpio18);
+    let mut channel5 = ledc.get_channel(ledc::channel::Number::Channel5, io.pins.gpio6);
     let mut motor5 = BrushlessESC::new(&mut channel5, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel6 = ledc.get_channel(ledc::channel::Number::Channel6, io.pins.gpio8);
+    let mut channel6 = ledc.get_channel(ledc::channel::Number::Channel6, io.pins.gpio5);
     let mut motor6 = BrushlessESC::new(&mut channel6, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel7 = ledc.get_channel(ledc::channel::Number::Channel7, io.pins.gpio3);
+    let mut channel7 = ledc.get_channel(ledc::channel::Number::Channel7, io.pins.gpio4);
     let mut motor7 = BrushlessESC::new(&mut channel7, &lstimer0, 2000, 1000, 1000);
 
     // Wifi AP setup
