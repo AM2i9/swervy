@@ -19,7 +19,8 @@ esp-alloc = { version = "0.5.0" }
 embedded-io = "0.6.1"
 esp-wifi = { version = "0.10.1", features = [
     "esp32s3",
-    "phy-enable-usb"
+    "phy-enable-usb",
+    "esp-now"
 ] }
 heapless = { version = "0.8.0", default-features = false }
 embedded-hal = "1.0.0"
