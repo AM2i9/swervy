@@ -40,6 +40,8 @@ macro_rules! mk_static {
 const PAIR_WITH_ME: [u8; 4] = [0xff, 0x68, 0x69, 0x3F];
 const HELLO: [u8; 6] = [0xff, 0x48, 0x45, 0x4C, 0x4C, 0x4F];
 
+const MAX_THROTTLE: u16 = 6;
+
 #[main]
 async fn main(spawner: Spawner) -> ! {
     // allocate heap memory for wifi
@@ -205,6 +207,11 @@ async fn main(spawner: Spawner) -> ! {
         loop {
             let r = esp_now.receive();
 
+            let mut rx: u16 = 123;
+            let mut ry: u16 = 123;
+            let mut lx: u16 = 123;
+            let mut ly: u16 = 123;
+
             if let Some(r) = r {
                 // log::info!("DST: {:?} | SRC: {:?} | DATA: {:?}", r.info.dst_address, r.info.src_address, r.get_data());
                 if r.info.src_address == remote_address
@@ -215,17 +222,23 @@ async fn main(spawner: Spawner) -> ! {
 
                     if state[..2] == [0xff, 0x00] {
                         // get joystick data
-                        let rx = state[6];
-                        let ry = state[7];
-                        let lx = state[4];
-                        let ly = state[5];
+                        rx = state[6] as u16;
+                        ry = state[7] as u16;
+                        lx = state[4] as u16;
+                        ly = state[5] as u16;
 
                         log::info!("RX: {} | RY: {} | LX: {} | LY: {}", rx, ry, lx, ly);
                     } else {
                         warn!("[ESP-NOW] No joystick data");
                     }
 
-                    // do swerve module stuff
+                    // we are NOT using the full range of these motors
+                    let throttle = 50 - MAX_THROTTLE + ((ry*(MAX_THROTTLE * 2)/255));
+
+                    motor1.set_throttle_pct(throttle as u8);
+                    motor3.set_throttle_pct(throttle as u8);
+                    motor5.set_throttle_pct(throttle as u8);
+                    motor7.set_throttle_pct(throttle as u8);
                     
                 }
             }
@@ -235,7 +248,7 @@ async fn main(spawner: Spawner) -> ! {
                 .checked_duration_since(last_rec_time)
                 .unwrap()
                 .to_millis()
-                > 5000
+                > 1000
             {
                 error!("[ESP-NOW] Remote timeout!");
                 break;
