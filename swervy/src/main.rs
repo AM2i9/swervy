@@ -9,10 +9,6 @@ mod pid;
 
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
-use embassy_net::{
-    tcp::TcpSocket, Config, IpListenEndpoint, Ipv4Address, Ipv4Cidr, Stack, StackResources,
-    StaticConfigV4,
-};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
@@ -20,15 +16,14 @@ use encoder::MuxedEncoder;
 use esc::BrushlessESC;
 use esp_alloc as _;
 use esp_backtrace as _;
+use esp_hal::efuse::Efuse;
 use esp_hal::i2c::I2c;
 use esp_hal::ledc::{self, Ledc, LowSpeed};
 use esp_hal::rng::Rng;
+use esp_hal::time;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{gpio::Io, peripherals::I2C0, prelude::*, Async};
-use esp_wifi::wifi::{
-    AccessPointConfiguration, Configuration, WifiApDevice, WifiController, WifiDevice, WifiEvent,
-    WifiState,
-};
+use esp_wifi::esp_now::{PeerInfo, BROADCAST_ADDRESS};
 use esp_wifi::EspWifiInitFor;
 use log::{error, info, warn};
 use static_cell::StaticCell;
@@ -41,6 +36,9 @@ macro_rules! mk_static {
         x
     }};
 }
+
+const PAIR_WITH_ME: [u8; 4] = [0xff, 0x68, 0x69, 0x3F];
+const HELLO: [u8; 6] = [0xff, 0x48, 0x45, 0x4C, 0x4C, 0x4F];
 
 #[main]
 async fn main(spawner: Spawner) -> ! {
@@ -55,7 +53,13 @@ async fn main(spawner: Spawner) -> ! {
 
     // Setup multiplxed encoders on I2C bus
 
-    let i2c = I2c::new_with_timeout_async(peripherals.I2C0, io.pins.gpio9, io.pins.gpio10, 1.kHz(), Some(10));
+    let i2c = I2c::new_with_timeout_async(
+        peripherals.I2C0,
+        io.pins.gpio9,
+        io.pins.gpio10,
+        1.kHz(),
+        Some(10),
+    );
     static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2c<I2C0, Async>>> = StaticCell::new();
     let i2cbus: &mut Mutex<NoopRawMutex, I2c<'_, I2C0, Async>> = I2C_BUS.init(Mutex::new(i2c));
 
@@ -113,7 +117,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
-    let init = esp_wifi::init(
+    let _init = esp_wifi::init(
         EspWifiInitFor::Wifi,
         timg0.timer0,
         Rng::new(peripherals.RNG),
@@ -122,8 +126,7 @@ async fn main(spawner: Spawner) -> ! {
     .unwrap();
 
     let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(&init, wifi, WifiApDevice).unwrap();
+    let mut esp_now = esp_wifi::esp_now::EspNow::new(&_init, wifi).unwrap();
 
     // init embussy
     {
@@ -131,58 +134,40 @@ async fn main(spawner: Spawner) -> ! {
         esp_hal_embassy::init(timg1.timer0);
     }
 
-    let config = Config::ipv4_static(StaticConfigV4 {
-        address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 2, 1), 24),
-        gateway: Some(Ipv4Address::from_bytes(&[192, 168, 2, 1])),
-        dns_servers: Default::default(),
-    });
-
-    let seed = 1234; // bleh
-
-    let stack = &*mk_static!(
-        Stack<WifiDevice<'_, WifiApDevice>>,
-        Stack::new(
-            wifi_interface,
-            config,
-            mk_static!(StackResources<3>, StackResources::<3>::new()),
-            seed
-        )
-    );
-
-    spawner.spawn(connection(controller)).ok();
-    spawner.spawn(net_task(stack)).ok();
-
-    let mut rx_buffer = [0; 1536];
-    let mut tx_buffer = [0; 1536];
+    let controller_address = Efuse::get_mac_address();
+    let mut remote_address: [u8; 6] = [0; 6];
 
     loop {
-        if stack.is_link_up() {
-            break;
+        // pair loop
+        info!("[ESP-NOW] Pairing loop started...");
+        loop {
+            // send "pair with me"
+            esp_now.send(&BROADCAST_ADDRESS, &PAIR_WITH_ME);
+
+            let r = esp_now.receive();
+
+            if let Some(r) = r {
+                if r.info.dst_address == controller_address && r.get_data() == HELLO {
+                    esp_now
+                        .add_peer(PeerInfo {
+                            peer_address: r.info.src_address,
+                            lmk: None,
+                            channel: None,
+                            encrypt: false,
+                        })
+                        .unwrap();
+
+                    remote_address = r.info.src_address;
+                    info!("[ESP-NOW] Got HELLO");
+                    
+                    // send back hello to remote
+                    esp_now.send(&remote_address, &HELLO);
+                    break;
+                }
+            }
         }
-        Timer::after(Duration::from_millis(500)).await;
-    }
-    info!("[WIFI] AP up!");
 
-    let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    socket.set_timeout(Some(Duration::from_millis(500)));
-
-    info!("[SOCK] Created TCP Socket");
-
-    loop {
-        info!("[SOCK] Waiting for connection");
-        let r = socket
-            .accept(IpListenEndpoint {
-                addr: None,
-                port: 6969,
-            })
-            .await;
-
-        if let Err(e) = r {
-            error!("[SOCK] Connection error: {e:?}");
-            continue;
-        } else {
-            info!("[SOCK] Client connected.");
-        }
+        info!("[ESP-NOW] Paired with {:?}", remote_address);
 
         info!("[ESC] Arming...");
         motor0.disable();
@@ -214,76 +199,52 @@ async fn main(spawner: Spawner) -> ! {
         Timer::after_millis(1000).await;
         info!("[ESC] Ready!");
 
-        // socket connection loop
+        // drive loop
+        let mut last_rec_time = time::now();
+        info!("[ESP-NOW] Remote loop started");
         loop {
-            let mut buffer = [0; 1536];
-            match socket.read(&mut buffer).await {
-                Ok(0) => {
-                    warn!("[SOCK] read EOF");
-                    break;
-                }
-                Ok(len) => {
-                    // Socket API:
-                    // [0] - Incomming start byte should be 0x2f, returns 0x2e on return
-                    // [1] - Motor 1 speed %
-                    // [2] - Motor 2 speed %
-                    // [3] - Motor 3 speed %
-                    // [4] - Motor 4 speed %
-                    // [5] - Motor 5 speed %
-                    // [6] - Motor 6 speed %
-                    // [7] - Motor 7 speed %
-                    // [8] - Motor 8 speed %
-                    // [9-11] - Ending bytes '\r\n' or 0x0D0A
-                    info!("{}", buffer[0]);
-                    if buffer[0] == 0x2f && &buffer[9..11] == b"\r\n" {
-                        // Set motor speeds
-                        motor0.set_throttle_pct(buffer[1]);
-                        motor1.set_throttle_pct(buffer[2]);
-                        motor2.set_throttle_pct(buffer[3]);
-                        motor3.set_throttle_pct(buffer[4]);
-                        motor4.set_throttle_pct(buffer[5]);
-                        motor5.set_throttle_pct(buffer[6]);
-                        motor6.set_throttle_pct(buffer[7]);
-                        motor7.set_throttle_pct(buffer[8]);
+            let r = esp_now.receive();
+
+            if let Some(r) = r {
+                // log::info!("DST: {:?} | SRC: {:?} | DATA: {:?}", r.info.dst_address, r.info.src_address, r.get_data());
+                if r.info.src_address == remote_address
+                    && r.info.dst_address == controller_address
+                {
+                    last_rec_time = time::now();
+                    let state = r.get_data();
+
+                    if state[..2] == [0xff, 0x00] {
+                        // get joystick data
+                        let rx = state[6];
+                        let ry = state[7];
+                        let lx = state[4];
+                        let ly = state[5];
+
+                        log::info!("RX: {} | RY: {} | LX: {} | LY: {}", rx, ry, lx, ly);
+                    } else {
+                        warn!("[ESP-NOW] No joystick data");
                     }
+
+                    // do swerve module stuff
+                    
                 }
-                Err(e) => {
-                    error!("[SOCK] read error: {:?}", e);
-                    break;
-                }
-            };
+            }
 
-            
-
-            let encoder_val_a = encoder_a.get_angle().await;
-            let encoder_val_b = encoder_b.get_angle().await;
-            let encoder_val_c = encoder_c.get_angle().await;
-            let encoder_val_d = encoder_d.get_angle().await;
-
-            
-            // Send encoder values
-            match socket
-                .write(&[
-                    0x2e,
-                    encoder_val_a.unwrap_or(0),
-                    encoder_val_b.unwrap_or(0),
-                    encoder_val_c.unwrap_or(0),
-                    encoder_val_d.unwrap_or(0),
-                    0x0D,
-                    0x0A,
-                ])
-                .await
+            // check for timeout of remote signals
+            if time::now()
+                .checked_duration_since(last_rec_time)
+                .unwrap()
+                .to_millis()
+                > 5000
             {
-                Ok(_) => {}
-                Err(err) => {
-                    error!("[SOCK] Socket write error: {err:?}",);
-                    break;
-                }
-            };
-
+                error!("[ESP-NOW] Remote timeout!");
+                break;
+            }
         }
 
-        warn!("[SOCK] Socket loop exit");
+        info!("[ESP-NOw] Connection closed");
+        esp_now.remove_peer(&remote_address);
+        remote_address = [0_u8; 6];
 
         info!("[ESC] Disabling motors");
         motor0.disable();
@@ -294,52 +255,5 @@ async fn main(spawner: Spawner) -> ! {
         motor5.disable();
         motor6.disable();
         motor7.disable();
-
-        // For some reason this freezes and idk why
-        // let r = socket.flush().await;
-
-        // if let Err(e) = r {
-        //     error!("[SOCK] Flush error: {e:?}");
-        // }
-
-        Timer::after(Duration::from_millis(1000)).await;
-
-        socket.close();
-        Timer::after(Duration::from_millis(1000)).await;
-
-        socket.abort();
-        info!("[SOCK] Socket closed");
     }
-}
-
-#[embassy_executor::task]
-async fn connection(mut controller: WifiController<'static>) {
-    info!(
-        "[WIFI] Device capabilities: {:?}",
-        controller.get_capabilities()
-    );
-    loop {
-        if esp_wifi::wifi::get_wifi_state() == WifiState::ApStarted {
-            // wait until we're no longer connected
-            controller.wait_for_event(WifiEvent::ApStop).await;
-            Timer::after(Duration::from_millis(5000)).await
-        }
-        // For some reason, the ability to add a password to the AP has not been implemented yet
-        // shouldn't matter cus im getting rid of this soon anyway
-        //TODO: Hide AP name?
-        //TODO: Change connection limit
-        if !matches!(controller.is_started(), Ok(true)) {
-            let client_config = Configuration::AccessPoint(AccessPointConfiguration {
-                ssid: "i have no internet don't connect".try_into().unwrap(),
-                ..Default::default()
-            });
-            controller.set_configuration(&client_config).unwrap();
-            controller.start().await.unwrap();
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn net_task(stack: &'static Stack<WifiDevice<'static, WifiApDevice>>) {
-    stack.run().await
 }

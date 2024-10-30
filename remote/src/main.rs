@@ -12,31 +12,18 @@ use esp_hal::{
 use esp_wifi::esp_now::{PeerInfo, BROADCAST_ADDRESS};
 
 extern crate alloc;
-use core::mem::MaybeUninit;
-
-fn init_heap() {
-    const HEAP_SIZE: usize = 32 * 1024;
-    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
-
-    unsafe {
-        esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
-            HEAP.as_mut_ptr() as *mut u8,
-            HEAP_SIZE,
-            esp_alloc::MemoryCapability::Internal.into(),
-        ));
-    }
-}
 
 const PAIR_WITH_ME: [u8; 4] = [0xff, 0x68, 0x69, 0x3F];
 const HELLO: [u8; 6] = [0xff, 0x48, 0x45, 0x4C, 0x4C, 0x4F];
 
 #[entry]
 fn main() -> ! {
+    esp_alloc::heap_allocator!(72 * 1024);
+
     #[allow(unused)]
     let peripherals = esp_hal::init(esp_hal::Config::default());
     let delay = Delay::new();
     let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
-    init_heap();
 
     esp_println::logger::init_logger_from_env();
 
@@ -73,6 +60,7 @@ fn main() -> ! {
         let r = esp_now.receive();
         if let Some(r) = r {
             log::info!("[ESP-NOW] Recieved pairing message!");
+            // log::info!("DST: {:?} | SRC: {:?} | DATA: {:?}", r.info.dst_address, r.info.src_address, r.get_data());
 
             // add peer
             if r.info.dst_address == BROADCAST_ADDRESS
@@ -89,7 +77,7 @@ fn main() -> ! {
                     })
                     .unwrap();
                 // send peer a "hello" packet
-                recv_address = r.info.dst_address;
+                recv_address = r.info.src_address;
                 let status = esp_now.send(&r.info.src_address, &HELLO).unwrap().wait();
                 match status {
                     Ok(_) => log::info!("[ESP-NOW] Sent HELLO, waiting for response..."),
@@ -99,8 +87,7 @@ fn main() -> ! {
             // wait for peer to send back a "hello" packet to this address
             else if r.info.dst_address == remote_address
             && esp_now.peer_exists(&r.info.src_address)
-            && r.len > 3
-            && r.get_data()[..4] == HELLO
+            && r.get_data() == HELLO
             {
                 log::info!("[ESP-NOW] HELLO packet recieved!");
                 break;
@@ -108,7 +95,7 @@ fn main() -> ! {
         }
     }
 
-    delay.delay(500.millis());
+    delay.delay(10.millis());
     log::info!("[ESP-NOW] Polling started.");
 
     loop {
@@ -119,22 +106,25 @@ fn main() -> ! {
         // will have to do manually for now
 
         // Poll controller
-        let mut buffer = [0xff, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut buffer = [0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
         if let Err(e) = spi.transfer(&mut buffer) {
             log::error!("[CONT] Error polling controller: {:?}", e);
             continue;
         }
 
-        if buffer[0] == 0xff && buffer[1] == 0x73 {
-            let state: &[u8] = &buffer[3..];
-            // println!("{:?}", state);
+        let header = if buffer[0] == 0xff && buffer[1] == 0x73 {
+            [0xff, 0x00]
+            
+        } else {
+            [0xff, 0xff]
+        };
+        let state: &[u8] = &buffer[3..];
+        // println!("{:?}", state);
 
-            // send controller state over esp-now broadcast
-            let header: [u8; 2] = [0xff, 0x00];
-            if let Err(e) = esp_now.send(&recv_address, &[&header, state].concat()).unwrap().wait() {
-                log::error!("[ESP-NOW] Error sending broadcast: {:?}", e);
-            };
-        }
+        // send controller state over esp-now broadcast
+        if let Err(e) = esp_now.send(&recv_address, &[&header, state].concat()).unwrap().wait() {
+            log::error!("[ESP-NOW] Error sending broadcast: {:?}", e);
+        };
     }
 }
