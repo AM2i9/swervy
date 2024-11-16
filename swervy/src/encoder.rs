@@ -5,7 +5,6 @@ use embassy_embedded_hal::shared_bus::{asynch::i2c::I2cDevice, I2cDeviceError};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_hal_async::i2c::I2c;
 use esp_hal::{peripherals::I2C0, Async};
-use esp_println::println;
 
 #[allow(unused)]
 #[derive(Clone, Copy)]
@@ -25,6 +24,7 @@ pub struct MuxedEncoder<'a> {
     channel: EncoderChannel,
     bus: I2cDevice<'a, NoopRawMutex, esp_hal::i2c::I2c<'static, I2C0, Async>>,
     address: u8,
+    offset: Option<u16>
 }
 
 impl<'a> MuxedEncoder<'a> {
@@ -32,27 +32,42 @@ impl<'a> MuxedEncoder<'a> {
         bus: I2cDevice<'a, NoopRawMutex, esp_hal::i2c::I2c<'static, I2C0, Async>>,
         channel: EncoderChannel,
         address: u8,
+        offset: Option<u16>
     ) -> Self {
         Self {
             channel,
             bus,
             address,
+            offset
         }
     }
 
     /// Raw angle count (min: 0, max: 16384)
     pub async fn get_raw_angle(&mut self) -> Result<u16, I2cDeviceError<esp_hal::i2c::Error>> {
+        
         self.bus.write(0x70, &[1 << (self.channel as u8)]).await?;
-
+        // log::info!("{}", 1 << (self.channel as u8));
+        
         let mut buffer = [0; 2];
-        println!("bleh1");
         self
             .bus
             .write_read(self.address, &[0x03], &mut buffer)
             .await?;
-        println!("bleh2");
 
-        Ok(((buffer[0] as u16) << 6) | (buffer[1] as u16))
+        let mut value = ((buffer[0] as u16) << 6) | (buffer[1] as u16);
+
+        if let Some(off) = self.offset {
+            value += off;
+            if value > 16384 {
+                value -= 16384;
+            }
+        }
+
+        Ok(value)
+    }
+
+    pub fn set_offset(&mut self, offset: Option<u16>) {
+        self.offset = offset;
     }
 
     /// Read angle as a u8 % value (out of 100)
@@ -75,11 +90,11 @@ impl<'a> MuxedEncoder<'a> {
     }
 
     /// Read angle as radians (0-2*PI)
-    pub async fn get_angle_radians(&mut self) -> Result<u16, I2cDeviceError<esp_hal::i2c::Error>> {
+    pub async fn get_angle_radians(&mut self) -> Result<f32, I2cDeviceError<esp_hal::i2c::Error>> {
         // match self.get_raw_angle().await {
         //     Ok(angle) => Ok((((angle * 2) as f32 * PI) / 16384.0) as u16),
         //     Err(e) => Err(e)
         // }
-        Ok((((self.get_raw_angle().await? * 2) as f32 * PI) / 16384.0) as u16)
+        Ok(((self.get_raw_angle().await? * 2) as f32 * PI) / 16384.0)
     }
 }
