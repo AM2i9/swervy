@@ -44,7 +44,7 @@ impl PIDController {
 
                 // this type cast may (will definitely) lead to problems sometime in the future
                 // but right now i couldn't give more of a fuck
-                let time_err = diff.to_micros() as f32;
+                let time_err = diff.to_secs() as f32;
 
                 (
                     // D
