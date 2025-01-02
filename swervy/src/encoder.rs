@@ -57,9 +57,12 @@ impl<'a> MuxedEncoder<'a> {
         let mut value = ((buffer[0] as u16) << 6) | (buffer[1] as u16);
 
         if let Some(off) = self.offset {
-            value += off;
-            if value > 16384 {
-                value -= 16384;
+            
+            if off > value {
+                value += 16384 - off;
+            }
+            else {
+                value -= off;
             }
         }
 
