@@ -348,15 +348,16 @@ async fn main(spawner: Spawner) -> ! {
                     steer3_pid.setpoint(steer_angle);
                     steer4_pid.setpoint(steer_angle);
 
-                    let steer_1_pid_out = steer1_pid.calculate(enc_1_angle, None);
-                    let steer_2_pid_out = steer2_pid.calculate(enc_2_angle, None);
-                    let steer_3_pid_out = steer3_pid.calculate(enc_3_angle, None);
-                    let steer_4_pid_out = steer4_pid.calculate(enc_4_angle, None);
+                    let timestamp = time::now();
 
-                    let steer1_out = 50.0 - ((5.0 * signum(libm::rintf(steer_1_pid_out))) + steer_1_pid_out);
-                    let steer2_out = 50.0 - ((5.0 * signum(libm::rintf(steer_2_pid_out))) + steer_2_pid_out);
-                    let steer3_out = 50.0 - ((5.0 * signum(libm::rintf(steer_3_pid_out))) + steer_3_pid_out);
-                    let steer4_out = 50.0 - ((5.0 * signum(libm::rintf(steer_4_pid_out))) + steer_4_pid_out);
+                    let steer_1_pid_out = steer1_pid.calculate(enc_1_angle, Some(timestamp));
+                    let steer_2_pid_out = steer2_pid.calculate(enc_2_angle, Some(timestamp));
+                    let steer_3_pid_out = steer3_pid.calculate(enc_3_angle, Some(timestamp));
+                    let steer_4_pid_out = steer4_pid.calculate(enc_4_angle, Some(timestamp));
+                    let steer1_out = 50.0 - ((3.0 * signum(steer_1_pid_out)) + steer_1_pid_out);
+                    let steer2_out = 50.0 - ((3.0 * signum(steer_2_pid_out)) + steer_2_pid_out);
+                    let steer3_out = 50.0 - ((3.0 * signum(steer_3_pid_out)) + steer_3_pid_out);
+                    let steer4_out = 50.0 - ((3.0 * signum(steer_4_pid_out)) + steer_4_pid_out);
 
                     // info!("drive_out: {} | steer_angle: {} | throttle: {} | 1: {} | 2: {} | 3: {} | 4: {}", enc_1_angle, steer_angle, throttle, 10.0 * signum(steer_1_pid_out), steer_1_pid_out, steer1_out, steer4_out);
 
