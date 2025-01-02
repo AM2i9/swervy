@@ -55,6 +55,22 @@ fn signum(num: f32) -> f32 {
     }
 }
 
+fn mag_min(a: f32, b: f32) -> f32{
+    if libm::fabsf(a) < libm::fabsf(b) {
+        a
+    } else {
+        b
+    }
+}
+
+fn deadzone(x: f32, min: f32, max: f32, zero: Option<f32>) -> f32{
+    if min < x && x < max {
+        zero.unwrap_or(0.0)
+    } else {
+        x
+    }
+}
+
 #[main]
 async fn main(spawner: Spawner) -> ! {
     // allocate heap memory for wifi
@@ -225,6 +241,11 @@ async fn main(spawner: Spawner) -> ! {
 
         info!("[ENC] Zeroing encoders...");
         {
+            encoder_a.set_offset(None);
+            encoder_b.set_offset(None);
+            encoder_c.set_offset(None);
+            encoder_d.set_offset(None);
+
             let encoder_a_off = encoder_a.get_raw_angle().await.unwrap_or(0);
             let encoder_b_off = encoder_b.get_raw_angle().await.unwrap_or(0);
             let encoder_c_off = encoder_c.get_raw_angle().await.unwrap_or(0);
@@ -320,29 +341,70 @@ async fn main(spawner: Spawner) -> ! {
                     }
 
                     // see if its quicker to go clockwise or counterclockwise to reach angle
-                    // if 359 - S <= M go clockwise else go counterclockwise (depends on direction of encoder)
-                    // if libm::fabsf(enc_1_angle - steer_angle) > PI {
-                    //     enc_1_angle = (enc_1_angle + steer_angle) - (2.0 * PI);
-                    // }
+                    // too lazy to do abstracting rn so this is what we doing
+
+                    let mut drive_speed_1 = 4.0 * throttle;
+                    let mut drive_speed_2 = 4.0 * throttle;
+                    let mut drive_speed_3 = 4.0 * throttle;
+                    let mut drive_speed_4 = 4.0 * throttle;
+
+                    let abs_enc_1 = enc_1_angle;
+
                     
-                    // if libm::fabsf(enc_2_angle - steer_angle) > PI {
-                    //     enc_2_angle = (enc_2_angle + steer_angle) - (2.0 * PI);
-                    // }
-                    // if libm::fabsf(enc_3_angle - steer_angle) > PI {
-                    //     enc_3_angle = (enc_3_angle + steer_angle) - (2.0 * PI);
-                    // }
-                    // if libm::fabsf(enc_4_angle - steer_angle) > PI {
-                    //     enc_4_angle = (enc_4_angle + steer_angle) - (2.0 * PI);
-                    // }
+                    { // 1
+                        let mut diff = libm::fabsf(enc_1_angle - steer_angle);
+                        if diff > PI {
+                            enc_1_angle -= PI;
+                            diff = libm::fabsf(enc_1_angle - steer_angle);
+                        }
+                        if  diff > (PI/2.0) {
+                            drive_speed_1 *= -1.0;
+                            enc_1_angle -= PI;
+                        }
+                        enc_1_angle = deadzone(enc_1_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                    }
+                    { // 2
+                        let mut diff = libm::fabsf(enc_2_angle - steer_angle);
+                        if diff > PI {
+                            enc_2_angle -= PI;
+                            diff = libm::fabsf(enc_2_angle - steer_angle);
+                        }
+                        if  diff > (PI/2.0) {
+                            drive_speed_2 *= -1.0;
+                            enc_2_angle -= PI;
+                        }
+                        enc_2_angle = deadzone(enc_2_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                    }
+                    { // 3
+                        let mut diff = libm::fabsf(enc_3_angle - steer_angle);
+                        if diff > PI {
+                            enc_3_angle -= PI;
+                            diff = libm::fabsf(enc_3_angle - steer_angle);
+                        }
+                        if  diff > (PI/2.0) {
+                            drive_speed_3 *= -1.0;
+                            enc_3_angle -= PI;
+                        }
+                        enc_3_angle = deadzone(enc_3_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                    }
+                    { // 4
+                        let mut diff = libm::fabsf(enc_4_angle - steer_angle);
+                        if diff > PI {
+                            enc_4_angle -= PI;
+                            diff = libm::fabsf(enc_4_angle - steer_angle);
+                        }
+                        if  diff > (PI/2.0) {
+                            drive_speed_4 *= -1.0;
+                            enc_4_angle -= PI;
+                        }
+                        enc_4_angle = deadzone(enc_4_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                    }
+                    
+                    let _ = motor1.set_throttle_pct((50.0 + drive_speed_1) as u8);
+                    let _ = motor3.set_throttle_pct((50.0 + drive_speed_2) as u8);
+                    let _ = motor5.set_throttle_pct((50.0 + drive_speed_3) as u8);
+                    let _ = motor7.set_throttle_pct((50.0 + drive_speed_4) as u8);
 
-                    // we are NOT using the full range of these motors
-                    let drive_speed = ((steer_mag * throttle) * (MAX_THROTTLE * 1.0)) as u8;
-                    // let drive_out = 49 + drive_speed;
-
-                    // let _ = motor1.set_throttle_pct(drive_out);
-                    // let _ = motor3.set_throttle_pct(drive_out);
-                    // let _ = motor5.set_throttle_pct(drive_out);
-                    // let _ = motor7.set_throttle_pct(drive_out);
                     steer1_pid.setpoint(steer_angle);
                     steer2_pid.setpoint(steer_angle);
                     steer3_pid.setpoint(steer_angle);
