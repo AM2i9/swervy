@@ -1,25 +1,22 @@
 use embedded_hal::pwm::SetDutyCycle;
 use esp_hal::ledc::channel::ChannelIFace;
 use esp_hal::ledc::LowSpeed;
-use esp_hal::{
-    gpio::OutputPin,
-    ledc::{
+use esp_hal::ledc::{
         channel::{self, config::PinConfig, Channel},
         timer::TimerIFace,
-    },
-};
+    };
 
 /// Struct implementation of a standard PWM Brushless ESC
-pub struct BrushlessESC<'a, O: OutputPin> {
-    pwm_channel: &'a mut Channel<'a, LowSpeed, O>,
+pub struct BrushlessESC<'a> {
+    pwm_channel: &'a mut Channel<'a, LowSpeed>,
     max_duty: u16,
     min_duty: u16,
     arm_duty: u16,
 }
 
-impl<'a, O: OutputPin> BrushlessESC<'a, O> {
+impl <'a> BrushlessESC<'a> {
     pub fn new(
-        pwm_channel: &'a mut Channel<'a, LowSpeed, O>,
+        pwm_channel: &'a mut Channel<'a, LowSpeed>,
         timer: &'a dyn TimerIFace<LowSpeed>,
         max_micros: u32,
         min_micros: u32,
@@ -38,7 +35,7 @@ impl<'a, O: OutputPin> BrushlessESC<'a, O> {
         // trying to avoid floating point math because computers suck
         // uses weird math that might not work over like 1MHz (or lower idk)
         // but i'm never going to use that high a frequency in this project
-        let freq = timer.get_frequency();
+        let freq = timer.frequency();
 
         let period_micros = 1_000_000 / freq;
 

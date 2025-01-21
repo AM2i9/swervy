@@ -13,20 +13,21 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use encoder::MuxedEncoder;
 use esc::BrushlessESC;
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::efuse::Efuse;
-use esp_hal::i2c::I2c;
+use esp_hal::i2c::master as esp_i2c;
+use esp_hal::ledc::timer::TimerIFace;
 use esp_hal::ledc::{self, Ledc, LowSpeed};
 use esp_hal::rng::Rng;
-use esp_hal::time;
+use esp_hal::time::{self, RateExtU32};
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{gpio::Io, peripherals::I2C0, prelude::*, Async};
+use esp_hal::Async;
+use esp_hal_embassy::main;
 use esp_wifi::esp_now::{PeerInfo, BROADCAST_ADDRESS};
-use esp_wifi::EspWifiInitFor;
 use log::{error, info, warn};
 use pid::{PIDConstants, PIDController};
 use static_cell::StaticCell;
@@ -55,7 +56,7 @@ fn signum(num: f32) -> f32 {
     }
 }
 
-fn mag_min(a: f32, b: f32) -> f32{
+fn mag_min(a: f32, b: f32) -> f32 {
     if libm::fabsf(a) < libm::fabsf(b) {
         a
     } else {
@@ -63,7 +64,7 @@ fn mag_min(a: f32, b: f32) -> f32{
     }
 }
 
-fn deadzone(x: f32, min: f32, max: f32, zero: Option<f32>) -> f32{
+fn deadzone(x: f32, min: f32, max: f32, zero: Option<f32>) -> f32 {
     if min < x && x < max {
         zero.unwrap_or(0.0)
     } else {
@@ -78,48 +79,48 @@ async fn main(spawner: Spawner) -> ! {
 
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
-    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
-
     esp_println::logger::init_logger_from_env();
 
     // Setup multiplxed encoders on I2C bus
 
-    let i2c: I2c<I2C0, Async> = I2c::new_with_timeout_async(
+    let i2c: esp_i2c::I2c<Async> = esp_i2c::I2c::new(
         peripherals.I2C0,
-        io.pins.gpio17,
-        io.pins.gpio16,
-        10.kHz(),
-        None,
-    );
-    static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2c<I2C0, Async>>> = StaticCell::new();
-    let i2cbus: &mut Mutex<NoopRawMutex, I2c<'_, I2C0, Async>> = I2C_BUS.init(Mutex::new(i2c));
+        esp_i2c::Config::default(), // might need 10khz
+    )
+    .unwrap()
+    .with_sda(peripherals.GPIO17)
+    .with_scl(peripherals.GPIO16)
+    .into_async();
+
+    static I2C_BUS: StaticCell<Mutex<NoopRawMutex, esp_i2c::I2c<Async>>> = StaticCell::new();
+    let i2cbus: &mut Mutex<NoopRawMutex, esp_i2c::I2c<'_, Async>> = I2C_BUS.init(Mutex::new(i2c));
 
     let mut encoder_a = MuxedEncoder::new(
         I2cDevice::new(i2cbus),
         encoder::EncoderChannel::Zero,
         0b0000110,
-        None
+        None,
     );
 
     let mut encoder_b = MuxedEncoder::new(
         I2cDevice::new(i2cbus),
         encoder::EncoderChannel::Two,
         0b0000110,
-        None
+        None,
     );
 
     let mut encoder_c = MuxedEncoder::new(
         I2cDevice::new(i2cbus),
         encoder::EncoderChannel::Four,
         0b0000110,
-        None
+        None,
     );
 
     let mut encoder_d = MuxedEncoder::new(
         I2cDevice::new(i2cbus),
         encoder::EncoderChannel::Six,
         0b0000110,
-        None
+        None,
     );
 
     // Configure PWM escs
@@ -127,7 +128,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut ledc = Ledc::new(peripherals.LEDC);
 
     ledc.set_global_slow_clock(ledc::LSGlobalClkSource::APBClk);
-    let mut lstimer0 = ledc.get_timer::<LowSpeed>(ledc::timer::Number::Timer0);
+    let mut lstimer0 = ledc.timer::<LowSpeed>(ledc::timer::Number::Timer0);
     lstimer0
         .configure(ledc::timer::config::Config {
             duty: ledc::timer::config::Duty::Duty14Bit,
@@ -136,28 +137,28 @@ async fn main(spawner: Spawner) -> ! {
         })
         .unwrap();
 
-    let mut channel0 = ledc.get_channel(ledc::channel::Number::Channel0, io.pins.gpio3);
+    let mut channel0 = ledc.channel(ledc::channel::Number::Channel0, peripherals.GPIO3);
     let mut motor0 = BrushlessESC::new(&mut channel0, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel1 = ledc.get_channel(ledc::channel::Number::Channel1, io.pins.gpio8);
+    let mut channel1 = ledc.channel(ledc::channel::Number::Channel1, peripherals.GPIO8);
     let mut motor1 = BrushlessESC::new(&mut channel1, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel2 = ledc.get_channel(ledc::channel::Number::Channel2, io.pins.gpio18);
+    let mut channel2 = ledc.channel(ledc::channel::Number::Channel2, peripherals.GPIO18);
     let mut motor2 = BrushlessESC::new(&mut channel2, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel3 = ledc.get_channel(ledc::channel::Number::Channel3, io.pins.gpio15);
+    let mut channel3 = ledc.channel(ledc::channel::Number::Channel3, peripherals.GPIO15);
     let mut motor3 = BrushlessESC::new(&mut channel3, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel4 = ledc.get_channel(ledc::channel::Number::Channel4, io.pins.gpio7);
+    let mut channel4 = ledc.channel(ledc::channel::Number::Channel4, peripherals.GPIO7);
     let mut motor4 = BrushlessESC::new(&mut channel4, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel5 = ledc.get_channel(ledc::channel::Number::Channel5, io.pins.gpio6);
+    let mut channel5 = ledc.channel(ledc::channel::Number::Channel5, peripherals.GPIO6);
     let mut motor5 = BrushlessESC::new(&mut channel5, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel6 = ledc.get_channel(ledc::channel::Number::Channel6, io.pins.gpio5);
+    let mut channel6 = ledc.channel(ledc::channel::Number::Channel6, peripherals.GPIO5);
     let mut motor6 = BrushlessESC::new(&mut channel6, &lstimer0, 2000, 1000, 1000);
 
-    let mut channel7 = ledc.get_channel(ledc::channel::Number::Channel7, io.pins.gpio4);
+    let mut channel7 = ledc.channel(ledc::channel::Number::Channel7, peripherals.GPIO4);
     let mut motor7 = BrushlessESC::new(&mut channel7, &lstimer0, 2000, 1000, 1000);
 
     // Wifi AP setup
@@ -165,7 +166,6 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
     let _init = esp_wifi::init(
-        EspWifiInitFor::Wifi,
         timg0.timer0,
         Rng::new(peripherals.RNG),
         peripherals.RADIO_CLK,
@@ -181,30 +181,30 @@ async fn main(spawner: Spawner) -> ! {
         esp_hal_embassy::init(timg1.timer0);
     }
 
-    let controller_address = Efuse::get_mac_address();
+    let controller_address = Efuse::read_base_mac_address();
     let mut remote_address: [u8; 6] = [0; 6];
 
     // let mut test_dev = I2cDevice::new(i2cbus);
 
     let mut steer1_pid = PIDController::new(PIDConstants {
-        kp: 2.0,
-        ki: 0.0,
-        kd: 1.0,
+        kp: 1.9,
+        ki: 0.2,
+        kd: 0.2,
     });
     let mut steer2_pid = PIDController::new(PIDConstants {
-        kp: 2.0,
+        kp: 0.1,
         ki: 0.0,
-        kd: 1.0,
+        kd: 0.1,
     });
     let mut steer3_pid = PIDController::new(PIDConstants {
-        kp: 2.0,
+        kp: 0.1,
         ki: 0.0,
-        kd: 1.0,
+        kd: 0.1,
     });
     let mut steer4_pid = PIDController::new(PIDConstants {
-        kp: 2.0,
+        kp: 0.1,
         ki: 0.0,
-        kd: 1.0,
+        kd: 0.1,
     });
 
     loop {
@@ -217,7 +217,7 @@ async fn main(spawner: Spawner) -> ! {
             let r = esp_now.receive();
 
             if let Some(r) = r {
-                if r.info.dst_address == controller_address && r.get_data() == HELLO {
+                if r.info.dst_address == controller_address && r.data() == HELLO {
                     esp_now
                         .add_peer(PeerInfo {
                             peer_address: r.info.src_address,
@@ -255,7 +255,10 @@ async fn main(spawner: Spawner) -> ! {
             encoder_b.set_offset(Some(encoder_b_off));
             encoder_c.set_offset(Some(encoder_c_off));
             encoder_d.set_offset(Some(encoder_d_off));
-            info!("[ENC] Zeroed! A: {} | B: {} | C: {} | D: {}", encoder_a_off, encoder_b_off, encoder_c_off, encoder_d_off);
+            info!(
+                "[ENC] Zeroed! A: {} | B: {} | C: {} | D: {}",
+                encoder_a_off, encoder_b_off, encoder_c_off, encoder_d_off
+            );
         }
 
         info!("[ESC] Arming...");
@@ -276,7 +279,7 @@ async fn main(spawner: Spawner) -> ! {
         motor5.arm_sig();
         motor6.arm_sig();
         motor7.arm_sig();
-        Timer::after_millis(500).await;
+        Timer::after_millis(1000).await;
         motor0.set_throttle_pct(50);
         motor1.set_throttle_pct(50);
         motor2.set_throttle_pct(50);
@@ -285,7 +288,7 @@ async fn main(spawner: Spawner) -> ! {
         motor5.set_throttle_pct(50);
         motor6.set_throttle_pct(50);
         motor7.set_throttle_pct(50);
-        Timer::after_millis(1000).await;
+        Timer::after_millis(2000).await;
         info!("[ESC] Ready!");
 
         // drive loop
@@ -304,7 +307,7 @@ async fn main(spawner: Spawner) -> ! {
                 if r.info.src_address == remote_address && r.info.dst_address == controller_address
                 {
                     last_rec_time = time::now();
-                    let state = r.get_data();
+                    let state = r.data();
 
                     if state[..2] == [0xff, 0x00] {
                         // get joystick data
@@ -327,18 +330,21 @@ async fn main(spawner: Spawner) -> ! {
                     // info!("encoders: 1 {enc_1_angle:?} | 2 {enc_2_angle:?} | 3 {enc_3_angle:?} | 4 {enc_4_angle:?}");
 
                     let steer_mag =
-                        libm::sqrtf(libm::powf(rx - 122.0, 2.0) + libm::powf(ry - 123.0, 2.0)) / 123.0;
+                        libm::sqrtf(libm::powf(rx - 122.0, 2.0) + libm::powf(ry - 123.0, 2.0))
+                            / 123.0;
 
                     let mut throttle: f32 = (ly - 123.0) / 127.0;
 
                     // see if its quicker to get to the angle or to get to the angle +180
                     // if |M - S| >= 179, new S = (S + 180) % 360, motor_dir = -1
                     let mut steer_angle = libm::atan2f(ry - 123.0, rx - 123.0);
-                    
+
                     // If output of atan2f is negative angle (pi->2pi), make it positive
                     if steer_angle < 0.0 {
                         steer_angle += 2.0 * PI;
                     }
+
+                    // steer_angle = PI/2.0;
 
                     // see if its quicker to go clockwise or counterclockwise to reach angle
                     // too lazy to do abstracting rn so this is what we doing
@@ -350,56 +356,79 @@ async fn main(spawner: Spawner) -> ! {
 
                     let abs_enc_1 = enc_1_angle;
 
-                    
-                    { // 1
+                    {
+                        // 1
                         let mut diff = libm::fabsf(enc_1_angle - steer_angle);
                         if diff > PI {
                             enc_1_angle -= PI;
                             diff = libm::fabsf(enc_1_angle - steer_angle);
                         }
-                        if  diff > (PI/2.0) {
+                        if diff > (PI / 2.0) {
                             drive_speed_1 *= -1.0;
                             enc_1_angle -= PI;
                         }
-                        enc_1_angle = deadzone(enc_1_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                        enc_1_angle = deadzone(
+                            enc_1_angle,
+                            steer_angle - 0.1,
+                            steer_angle + 0.1,
+                            Some(steer_angle),
+                        );
                     }
-                    { // 2
+                    {
+                        // 2
                         let mut diff = libm::fabsf(enc_2_angle - steer_angle);
                         if diff > PI {
                             enc_2_angle -= PI;
                             diff = libm::fabsf(enc_2_angle - steer_angle);
                         }
-                        if  diff > (PI/2.0) {
+                        if diff > (PI / 2.0) {
                             drive_speed_2 *= -1.0;
                             enc_2_angle -= PI;
                         }
-                        enc_2_angle = deadzone(enc_2_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                        enc_2_angle = deadzone(
+                            enc_2_angle,
+                            steer_angle - 0.1,
+                            steer_angle + 0.1,
+                            Some(steer_angle),
+                        );
                     }
-                    { // 3
+                    {
+                        // 3
                         let mut diff = libm::fabsf(enc_3_angle - steer_angle);
                         if diff > PI {
                             enc_3_angle -= PI;
                             diff = libm::fabsf(enc_3_angle - steer_angle);
                         }
-                        if  diff > (PI/2.0) {
+                        if diff > (PI / 2.0) {
                             drive_speed_3 *= -1.0;
                             enc_3_angle -= PI;
                         }
-                        enc_3_angle = deadzone(enc_3_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                        enc_3_angle = deadzone(
+                            enc_3_angle,
+                            steer_angle - 0.1,
+                            steer_angle + 0.1,
+                            Some(steer_angle),
+                        );
                     }
-                    { // 4
+                    {
+                        // 4
                         let mut diff = libm::fabsf(enc_4_angle - steer_angle);
                         if diff > PI {
                             enc_4_angle -= PI;
                             diff = libm::fabsf(enc_4_angle - steer_angle);
                         }
-                        if  diff > (PI/2.0) {
+                        if diff > (PI / 2.0) {
                             drive_speed_4 *= -1.0;
                             enc_4_angle -= PI;
                         }
-                        enc_4_angle = deadzone(enc_4_angle, steer_angle - 0.1, steer_angle + 0.1, Some(steer_angle));
+                        enc_4_angle = deadzone(
+                            enc_4_angle,
+                            steer_angle - 0.1,
+                            steer_angle + 0.1,
+                            Some(steer_angle),
+                        );
                     }
-                    
+
                     let _ = motor1.set_throttle_pct((50.0 + drive_speed_1) as u8);
                     let _ = motor3.set_throttle_pct((50.0 + drive_speed_2) as u8);
                     let _ = motor5.set_throttle_pct((50.0 + drive_speed_3) as u8);
@@ -416,17 +445,17 @@ async fn main(spawner: Spawner) -> ! {
                     let steer_2_pid_out = steer2_pid.calculate(enc_2_angle, Some(timestamp));
                     let steer_3_pid_out = steer3_pid.calculate(enc_3_angle, Some(timestamp));
                     let steer_4_pid_out = steer4_pid.calculate(enc_4_angle, Some(timestamp));
-                    let steer1_out = 50.0 - ((3.0 * signum(steer_1_pid_out)) + steer_1_pid_out);
-                    let steer2_out = 50.0 - ((3.0 * signum(steer_2_pid_out)) + steer_2_pid_out);
-                    let steer3_out = 50.0 - ((3.0 * signum(steer_3_pid_out)) + steer_3_pid_out);
-                    let steer4_out = 50.0 - ((3.0 * signum(steer_4_pid_out)) + steer_4_pid_out);
+                    let steer1_out = 50.0 - ((8.0 * signum(steer_1_pid_out)) + steer_1_pid_out);
+                    let steer2_out = 50.0 - ((8.0 * signum(steer_2_pid_out)) + steer_2_pid_out);
+                    let steer3_out = 50.0 - ((8.0 * signum(steer_3_pid_out)) + steer_3_pid_out);
+                    let steer4_out = 50.0 - ((8.0 * signum(steer_4_pid_out)) + steer_4_pid_out);
 
-                    // info!("drive_out: {} | steer_angle: {} | throttle: {} | 1: {} | 2: {} | 3: {} | 4: {}", enc_1_angle, steer_angle, throttle, 10.0 * signum(steer_1_pid_out), steer_1_pid_out, steer1_out, steer4_out);
+                    info!("enc_acutal: {} | enc_angle: {} | steer_angle: {} | throttle: {} | signum * 10: {} | steer_1_pid_out: {} | steer1_out: {} | steer4_out: {}", abs_enc_1, enc_1_angle, steer_angle, throttle, 10.0 * signum(steer_1_pid_out), steer_1_pid_out, steer1_out, steer4_out);
 
                     let _ = motor0.set_throttle_pct(steer1_out as u8);
-                    let _ = motor2.set_throttle_pct(steer2_out as u8);
-                    let _ = motor4.set_throttle_pct(steer3_out as u8);
-                    let _ = motor6.set_throttle_pct(steer4_out as u8);
+                    // let _ = motor2.set_throttle_pct(steer2_out as u8);
+                    // let _ = motor4.set_throttle_pct(steer3_out as u8);
+                    // let _ = motor6.set_throttle_pct(steer4_out as u8);
                 }
             }
 

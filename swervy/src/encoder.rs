@@ -4,7 +4,7 @@ use embassy_embedded_hal::shared_bus::{asynch::i2c::I2cDevice, I2cDeviceError};
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_hal_async::i2c::I2c;
-use esp_hal::{peripherals::I2C0, Async};
+use esp_hal::Async;
 
 #[allow(unused)]
 #[derive(Clone, Copy)]
@@ -22,14 +22,14 @@ pub enum EncoderChannel {
 /// Struct implementation of a MTT6701 Magnetic Absolute Encoder over I2C
 pub struct MuxedEncoder<'a> {
     channel: EncoderChannel,
-    bus: I2cDevice<'a, NoopRawMutex, esp_hal::i2c::I2c<'static, I2C0, Async>>,
+    bus: I2cDevice<'a, NoopRawMutex, esp_hal::i2c::master::I2c<'static, Async>>,
     address: u8,
     offset: Option<u16>
 }
 
 impl<'a> MuxedEncoder<'a> {
     pub fn new(
-        bus: I2cDevice<'a, NoopRawMutex, esp_hal::i2c::I2c<'static, I2C0, Async>>,
+        bus: I2cDevice<'a, NoopRawMutex, esp_hal::i2c::master::I2c<'static, Async>>,
         channel: EncoderChannel,
         address: u8,
         offset: Option<u16>
@@ -43,7 +43,7 @@ impl<'a> MuxedEncoder<'a> {
     }
 
     /// Raw angle count (min: 0, max: 16384)
-    pub async fn get_raw_angle(&mut self) -> Result<u16, I2cDeviceError<esp_hal::i2c::Error>> {
+    pub async fn get_raw_angle(&mut self) -> Result<u16, I2cDeviceError<esp_hal::i2c::master::Error>> {
         
         self.bus.write(0x70, &[1 << (self.channel as u8)]).await?;
         // log::info!("{}", 1 << (self.channel as u8));
@@ -74,7 +74,7 @@ impl<'a> MuxedEncoder<'a> {
     }
 
     /// Read angle as a u8 % value (out of 100)
-    pub async fn get_angle(&mut self) -> Result<u8, I2cDeviceError<esp_hal::i2c::Error>> {
+    pub async fn get_angle(&mut self) -> Result<u8, I2cDeviceError<esp_hal::i2c::master::Error>> {
         // match self.get_raw_angle().await {
         //     Ok(c) => Ok(),
         //     Err(e) => Err(e)
@@ -84,7 +84,7 @@ impl<'a> MuxedEncoder<'a> {
     }
 
     /// Read angle as degrees (0-360)
-    pub async fn get_angle_degrees(&mut self) -> Result<u16, I2cDeviceError<esp_hal::i2c::Error>> {
+    pub async fn get_angle_degrees(&mut self) -> Result<u16, I2cDeviceError<esp_hal::i2c::master::Error>> {
         // match self.get_raw_angle().await {
         //     Ok(angle) => Ok((((angle * 360) as f32) / 16384.0) as u16),
         //     Err(e) => Err(e)
@@ -93,7 +93,7 @@ impl<'a> MuxedEncoder<'a> {
     }
 
     /// Read angle as radians (0-2*PI)
-    pub async fn get_angle_radians(&mut self) -> Result<f32, I2cDeviceError<esp_hal::i2c::Error>> {
+    pub async fn get_angle_radians(&mut self) -> Result<f32, I2cDeviceError<esp_hal::i2c::master::Error>> {
         // match self.get_raw_angle().await {
         //     Ok(angle) => Ok((((angle * 2) as f32 * PI) / 16384.0) as u16),
         //     Err(e) => Err(e)
