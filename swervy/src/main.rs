@@ -5,7 +5,9 @@ extern crate alloc;
 
 mod encoder;
 mod esc;
+mod module;
 mod pid;
+mod util;
 
 use core::f32::consts::PI;
 
@@ -28,49 +30,13 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_hal::Async;
 use esp_hal_embassy::main;
 use esp_wifi::esp_now::{PeerInfo, BROADCAST_ADDRESS};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
+use module::SwerveModule;
 use pid::{PIDConstants, PIDController};
 use static_cell::StaticCell;
 
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
-
 const PAIR_WITH_ME: [u8; 4] = [0xff, 0x68, 0x69, 0x3F];
 const HELLO: [u8; 6] = [0xff, 0x48, 0x45, 0x4C, 0x4C, 0x4F];
-
-const MAX_THROTTLE: f32 = 6.0;
-
-fn signum(num: f32) -> f32 {
-    if num > 0.0 {
-        1.0
-    } else if num < 0.0 {
-        -1.0
-    } else {
-        0.0
-    }
-}
-
-fn mag_min(a: f32, b: f32) -> f32 {
-    if libm::fabsf(a) < libm::fabsf(b) {
-        a
-    } else {
-        b
-    }
-}
-
-fn deadzone(x: f32, min: f32, max: f32, zero: Option<f32>) -> f32 {
-    if min < x && x < max {
-        zero.unwrap_or(0.0)
-    } else {
-        x
-    }
-}
 
 #[main]
 async fn main(spawner: Spawner) -> ! {
@@ -207,6 +173,11 @@ async fn main(spawner: Spawner) -> ! {
         kd: 0.1,
     });
 
+    let mut module1 = SwerveModule::new(motor1, motor0, encoder_a, steer1_pid);
+    let mut module2 = SwerveModule::new(motor3, motor2, encoder_b, steer2_pid);
+    let mut module3 = SwerveModule::new(motor5, motor4, encoder_c, steer3_pid);
+    let mut module4 = SwerveModule::new(motor7, motor6, encoder_d, steer4_pid);
+
     loop {
         // pair loop
         info!("[ESP-NOW] Pairing loop started...");
@@ -240,54 +211,26 @@ async fn main(spawner: Spawner) -> ! {
         info!("[ESP-NOW] Paired with {:?}", remote_address);
 
         info!("[ENC] Zeroing encoders...");
-        {
-            encoder_a.set_offset(None);
-            encoder_b.set_offset(None);
-            encoder_c.set_offset(None);
-            encoder_d.set_offset(None);
-
-            let encoder_a_off = encoder_a.get_raw_angle().await.unwrap_or(0);
-            let encoder_b_off = encoder_b.get_raw_angle().await.unwrap_or(0);
-            let encoder_c_off = encoder_c.get_raw_angle().await.unwrap_or(0);
-            let encoder_d_off = encoder_d.get_raw_angle().await.unwrap_or(0);
-
-            encoder_a.set_offset(Some(encoder_a_off));
-            encoder_b.set_offset(Some(encoder_b_off));
-            encoder_c.set_offset(Some(encoder_c_off));
-            encoder_d.set_offset(Some(encoder_d_off));
-            info!(
-                "[ENC] Zeroed! A: {} | B: {} | C: {} | D: {}",
-                encoder_a_off, encoder_b_off, encoder_c_off, encoder_d_off
-            );
-        }
+        module1.zero();
+        module2.zero();
+        module3.zero();
+        module4.zero();
 
         info!("[ESC] Arming...");
-        motor0.disable();
-        motor1.disable();
-        motor2.disable();
-        motor3.disable();
-        motor4.disable();
-        motor5.disable();
-        motor6.disable();
-        motor7.disable();
+        module1.disable();
+        module2.disable();
+        module3.disable();
+        module4.disable();
         Timer::after_millis(500).await;
-        motor0.arm_sig();
-        motor1.arm_sig();
-        motor2.arm_sig();
-        motor3.arm_sig();
-        motor4.arm_sig();
-        motor5.arm_sig();
-        motor6.arm_sig();
-        motor7.arm_sig();
+        module1.arm();
+        module2.arm();
+        module3.arm();
+        module4.arm();
         Timer::after_millis(1000).await;
-        motor0.set_throttle_pct(50);
-        motor1.set_throttle_pct(50);
-        motor2.set_throttle_pct(50);
-        motor3.set_throttle_pct(50);
-        motor4.set_throttle_pct(50);
-        motor5.set_throttle_pct(50);
-        motor6.set_throttle_pct(50);
-        motor7.set_throttle_pct(50);
+        module1.center_throttles();
+        module2.center_throttles();
+        module3.center_throttles();
+        module4.center_throttles();
         Timer::after_millis(2000).await;
         info!("[ESC] Ready!");
 
@@ -321,22 +264,13 @@ async fn main(spawner: Spawner) -> ! {
                         warn!("[ESP-NOW] No joystick data");
                     }
 
-                    // TODO: Find a better failure mode for encoder errors
-                    let mut enc_1_angle = encoder_a.get_angle_radians().await.unwrap_or(0.0);
-                    let mut enc_2_angle = encoder_b.get_angle_radians().await.unwrap_or(0.0);
-                    let mut enc_3_angle = encoder_c.get_angle_radians().await.unwrap_or(0.0);
-                    let mut enc_4_angle = encoder_d.get_angle_radians().await.unwrap_or(0.0);
-
                     // info!("encoders: 1 {enc_1_angle:?} | 2 {enc_2_angle:?} | 3 {enc_3_angle:?} | 4 {enc_4_angle:?}");
 
                     let steer_mag =
                         libm::sqrtf(libm::powf(rx - 122.0, 2.0) + libm::powf(ry - 123.0, 2.0))
                             / 123.0;
 
-                    let mut throttle: f32 = (ly - 123.0) / 127.0;
-
-                    // see if its quicker to get to the angle or to get to the angle +180
-                    // if |M - S| >= 179, new S = (S + 180) % 360, motor_dir = -1
+                    let throttle: f32 = (ly - 123.0) / 127.0;
                     let mut steer_angle = libm::atan2f(ry - 123.0, rx - 123.0);
 
                     // If output of atan2f is negative angle (pi->2pi), make it positive
@@ -344,118 +278,21 @@ async fn main(spawner: Spawner) -> ! {
                         steer_angle += 2.0 * PI;
                     }
 
-                    // steer_angle = PI/2.0;
+                    module1.set_angle(steer_angle);
+                    module2.set_angle(steer_angle);
+                    module3.set_angle(steer_angle);
+                    module4.set_angle(steer_angle);
 
-                    // see if its quicker to go clockwise or counterclockwise to reach angle
-                    // too lazy to do abstracting rn so this is what we doing
+                    module1.set_wheel_speed(throttle);
+                    module2.set_wheel_speed(throttle);
+                    module3.set_wheel_speed(throttle);
+                    module4.set_wheel_speed(throttle);
 
-                    let mut drive_speed_1 = 4.0 * throttle;
-                    let mut drive_speed_2 = 4.0 * throttle;
-                    let mut drive_speed_3 = 4.0 * throttle;
-                    let mut drive_speed_4 = 4.0 * throttle;
-
-                    let abs_enc_1 = enc_1_angle;
-
-                    {
-                        // 1
-                        let mut diff = libm::fabsf(enc_1_angle - steer_angle);
-                        if diff > PI {
-                            enc_1_angle -= PI;
-                            diff = libm::fabsf(enc_1_angle - steer_angle);
-                        }
-                        if diff > (PI / 2.0) {
-                            drive_speed_1 *= -1.0;
-                            enc_1_angle -= PI;
-                        }
-                        enc_1_angle = deadzone(
-                            enc_1_angle,
-                            steer_angle - 0.1,
-                            steer_angle + 0.1,
-                            Some(steer_angle),
-                        );
-                    }
-                    {
-                        // 2
-                        let mut diff = libm::fabsf(enc_2_angle - steer_angle);
-                        if diff > PI {
-                            enc_2_angle -= PI;
-                            diff = libm::fabsf(enc_2_angle - steer_angle);
-                        }
-                        if diff > (PI / 2.0) {
-                            drive_speed_2 *= -1.0;
-                            enc_2_angle -= PI;
-                        }
-                        enc_2_angle = deadzone(
-                            enc_2_angle,
-                            steer_angle - 0.1,
-                            steer_angle + 0.1,
-                            Some(steer_angle),
-                        );
-                    }
-                    {
-                        // 3
-                        let mut diff = libm::fabsf(enc_3_angle - steer_angle);
-                        if diff > PI {
-                            enc_3_angle -= PI;
-                            diff = libm::fabsf(enc_3_angle - steer_angle);
-                        }
-                        if diff > (PI / 2.0) {
-                            drive_speed_3 *= -1.0;
-                            enc_3_angle -= PI;
-                        }
-                        enc_3_angle = deadzone(
-                            enc_3_angle,
-                            steer_angle - 0.1,
-                            steer_angle + 0.1,
-                            Some(steer_angle),
-                        );
-                    }
-                    {
-                        // 4
-                        let mut diff = libm::fabsf(enc_4_angle - steer_angle);
-                        if diff > PI {
-                            enc_4_angle -= PI;
-                            diff = libm::fabsf(enc_4_angle - steer_angle);
-                        }
-                        if diff > (PI / 2.0) {
-                            drive_speed_4 *= -1.0;
-                            enc_4_angle -= PI;
-                        }
-                        enc_4_angle = deadzone(
-                            enc_4_angle,
-                            steer_angle - 0.1,
-                            steer_angle + 0.1,
-                            Some(steer_angle),
-                        );
-                    }
-
-                    let _ = motor1.set_throttle_pct((50.0 + drive_speed_1) as u8);
-                    let _ = motor3.set_throttle_pct((50.0 + drive_speed_2) as u8);
-                    let _ = motor5.set_throttle_pct((50.0 + drive_speed_3) as u8);
-                    let _ = motor7.set_throttle_pct((50.0 + drive_speed_4) as u8);
-
-                    steer1_pid.setpoint(steer_angle);
-                    steer2_pid.setpoint(steer_angle);
-                    steer3_pid.setpoint(steer_angle);
-                    steer4_pid.setpoint(steer_angle);
-
-                    let timestamp = time::now();
-
-                    let steer_1_pid_out = steer1_pid.calculate(enc_1_angle, Some(timestamp));
-                    let steer_2_pid_out = steer2_pid.calculate(enc_2_angle, Some(timestamp));
-                    let steer_3_pid_out = steer3_pid.calculate(enc_3_angle, Some(timestamp));
-                    let steer_4_pid_out = steer4_pid.calculate(enc_4_angle, Some(timestamp));
-                    let steer1_out = 50.0 - ((8.0 * signum(steer_1_pid_out)) + steer_1_pid_out);
-                    let steer2_out = 50.0 - ((8.0 * signum(steer_2_pid_out)) + steer_2_pid_out);
-                    let steer3_out = 50.0 - ((8.0 * signum(steer_3_pid_out)) + steer_3_pid_out);
-                    let steer4_out = 50.0 - ((8.0 * signum(steer_4_pid_out)) + steer_4_pid_out);
-
-                    info!("enc_acutal: {} | enc_angle: {} | steer_angle: {} | throttle: {} | signum * 10: {} | steer_1_pid_out: {} | steer1_out: {} | steer4_out: {}", abs_enc_1, enc_1_angle, steer_angle, throttle, 10.0 * signum(steer_1_pid_out), steer_1_pid_out, steer1_out, steer4_out);
-
-                    let _ = motor0.set_throttle_pct(steer1_out as u8);
-                    // let _ = motor2.set_throttle_pct(steer2_out as u8);
-                    // let _ = motor4.set_throttle_pct(steer3_out as u8);
-                    // let _ = motor6.set_throttle_pct(steer4_out as u8);
+                    // Execute motion
+                    module1.periodic().await;
+                    module2.periodic().await;
+                    module3.periodic().await;
+                    module4.periodic().await;
                 }
             }
 
@@ -471,18 +308,14 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
+        info!("[ESC] Disabling modules");
+        module1.disable();
+        module2.disable();
+        module3.disable();
+        module4.disable();
+
         info!("[ESP-NOw] Connection closed");
         esp_now.remove_peer(&remote_address);
         remote_address = [0_u8; 6];
-
-        info!("[ESC] Disabling motors");
-        let _ = motor0.disable();
-        let _ = motor1.disable();
-        let _ = motor2.disable();
-        let _ = motor3.disable();
-        let _ = motor4.disable();
-        let _ = motor5.disable();
-        let _ = motor6.disable();
-        let _ = motor7.disable();
     }
 }
