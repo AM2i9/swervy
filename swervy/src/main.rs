@@ -29,6 +29,7 @@ use esp_hal::time::{self, RateExtU32};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::Async;
 use esp_hal_embassy::main;
+use esp_println::println;
 use esp_wifi::esp_now::{PeerInfo, BROADCAST_ADDRESS};
 use log::{debug, error, info, warn};
 use module::SwerveModule;
@@ -177,7 +178,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut module2 = SwerveModule::new(motor3, motor2, encoder_b, steer2_pid);
     let mut module3 = SwerveModule::new(motor5, motor4, encoder_c, steer3_pid);
     let mut module4 = SwerveModule::new(motor7, motor6, encoder_d, steer4_pid);
-
+    
     loop {
         // pair loop
         info!("[ESP-NOW] Pairing loop started...");
@@ -278,10 +279,23 @@ async fn main(spawner: Spawner) -> ! {
                         steer_angle += 2.0 * PI;
                     }
 
+                    publish_value!("steer_angle", steer_angle);
+                    publish_value!("throttle", throttle);
+
                     module1.set_angle(steer_angle);
                     module2.set_angle(steer_angle);
                     module3.set_angle(steer_angle);
                     module4.set_angle(steer_angle);
+                    
+                    publish_value!("steer_angle_1", module1.get_angle().await);
+                    publish_value!("steer_angle_2", module2.get_angle().await);
+                    publish_value!("steer_angle_3", module3.get_angle().await);
+                    publish_value!("steer_angle_4", module4.get_angle().await);
+
+                    publish_value!("module1_setpoint", module1.get_setpoint());
+                    publish_value!("module2_setpoint", module2.get_setpoint());
+                    publish_value!("module3_setpoint", module3.get_setpoint());
+                    publish_value!("module4_setpoint", module4.get_setpoint());
 
                     module1.set_wheel_speed(throttle);
                     module2.set_wheel_speed(throttle);

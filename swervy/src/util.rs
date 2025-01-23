@@ -23,3 +23,10 @@ pub fn deadzone(x: f32, min: f32, max: f32, zero: Option<f32>) -> f32 {
         x
     }
 }
+
+#[macro_export]
+macro_rules! publish_value {
+    ($n:expr, $v:expr) => {
+        println!("VAR!:{}:{}", $n, $v);
+    }
+}

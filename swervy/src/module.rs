@@ -47,6 +47,10 @@ impl<'a> SwerveModule<'a> {
         self.pid.setpoint(angle);
     }
 
+    pub fn get_setpoint(&self) -> f32 {
+        self.pid.setpoint
+    }
+
     pub fn set_wheel_speed(&mut self, speed: f32) {
         self.wheelspeed = speed;
     }
@@ -95,8 +99,7 @@ impl<'a> SwerveModule<'a> {
         let pid_out = self.pid.calculate(measurement, Some(timestamp));
         let steer_out = 50.0 - ((8.0 * signum(pid_out)) + pid_out);
 
-        self.drive
-            .set_throttle_pct((50.0 + (4.0 * self.wheelspeed * drive_dir)) as u8);
+        self.drive.set_throttle_pct((50.0 + (4.0 * self.wheelspeed * drive_dir)) as u8);
         self.steer.set_throttle_pct(steer_out as u8);
     }
 }
