@@ -1,10 +1,12 @@
 use embedded_hal::pwm::SetDutyCycle;
+use esp_hal::gpio::interconnect::PeripheralOutput;
+use esp_hal::gpio::{Output, OutputPin};
 use esp_hal::ledc::channel::ChannelIFace;
 use esp_hal::ledc::LowSpeed;
 use esp_hal::ledc::{
-        channel::{self, config::PinConfig, Channel},
-        timer::TimerIFace,
-    };
+    channel::{self, config::PinConfig, Channel},
+    timer::TimerIFace,
+};
 
 /// Struct implementation of a standard PWM Brushless ESC
 pub struct BrushlessESC<'a> {
@@ -14,7 +16,7 @@ pub struct BrushlessESC<'a> {
     arm_duty: u16,
 }
 
-impl <'a> BrushlessESC<'a> {
+impl<'a> BrushlessESC<'a> {
     pub fn new(
         pwm_channel: &'a mut Channel<'a, LowSpeed>,
         timer: &'a dyn TimerIFace<LowSpeed>,
@@ -62,6 +64,51 @@ impl <'a> BrushlessESC<'a> {
 
     pub fn arm_sig(&mut self) -> Result<(), channel::Error> {
         self.pwm_channel.set_duty_cycle(self.arm_duty)
+    }
+
+    pub fn disable(&mut self) -> Result<(), channel::Error> {
+        self.pwm_channel.set_duty_cycle_fully_off()
+    }
+}
+
+// Lazily written to get new motors to work
+// They're from aliexpress and use a control scheme that was weird enough
+// that I needed to make a level shifter/signal inverter board in order to
+// even control it with the ESP32 board
+pub struct ESCB<'a> {
+    pwm_channel: &'a mut Channel<'a, LowSpeed>,
+    dir_pin: Output<'a>,
+}
+
+impl<'a> ESCB<'a> {
+    pub fn new(
+        pwm_channel: &'a mut Channel<'a, LowSpeed>,
+        dir_pin: Output<'a>,
+        timer: &'a dyn TimerIFace<LowSpeed>,
+    ) -> Self {
+        pwm_channel
+            .configure(channel::config::Config {
+                timer,
+                duty_pct: 0,
+                pin_config: PinConfig::PushPull,
+            })
+            .unwrap();
+
+        Self {
+            pwm_channel,
+            dir_pin,
+        }
+    }
+
+    pub fn set_throttle_pct(&mut self, pct: f32) -> Result<(), channel::Error> {
+        // This ESC has a seperate direction input
+        if pct < 0.0 {
+            self.dir_pin.set_high();
+        } else {
+            self.dir_pin.set_low();
+        }
+
+        self.pwm_channel.set_duty(pct as u8)
     }
 
     pub fn disable(&mut self) -> Result<(), channel::Error> {

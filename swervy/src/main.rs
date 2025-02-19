@@ -17,7 +17,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
 use encoder::MuxedEncoder;
-use esc::BrushlessESC;
+use esc::{BrushlessESC, ESCB};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::efuse::Efuse;
@@ -27,7 +27,7 @@ use esp_hal::ledc::{self, Ledc, LowSpeed};
 use esp_hal::rng::Rng;
 use esp_hal::time::{self, RateExtU32};
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::Async;
+use esp_hal::{gpio, Async};
 use esp_hal_embassy::main;
 use esp_println::println;
 use esp_wifi::esp_now::{PeerInfo, BROADCAST_ADDRESS};
@@ -52,7 +52,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let i2c: esp_i2c::I2c<Async> = esp_i2c::I2c::new(
         peripherals.I2C0,
-        esp_i2c::Config::default(), // might need 10khz
+        esp_i2c::Config::default(), // mightual client window inside this container. This field is set to null for split containers or otherwise empty containers. This ID corresponds t need 10khz
     )
     .unwrap()
     .with_sda(peripherals.GPIO17)
@@ -75,6 +75,7 @@ async fn main(spawner: Spawner) -> ! {
         0b0000110,
         None,
     );
+    use esp_hal::time::{self, RateExtU32};
 
     let mut encoder_c = MuxedEncoder::new(
         I2cDevice::new(i2cbus),
@@ -104,29 +105,49 @@ async fn main(spawner: Spawner) -> ! {
         })
         .unwrap();
 
+    // Steer motors
+
     let mut channel0 = ledc.channel(ledc::channel::Number::Channel0, peripherals.GPIO3);
-    let mut motor0 = BrushlessESC::new(&mut channel0, &lstimer0, 2000, 1000, 1000);
+    let mut steer_motor1 = ESCB::new(
+        &mut channel0,
+        gpio::Output::new(peripherals.GPIO9, gpio::Level::Low),
+        &lstimer0,
+    );
 
     let mut channel1 = ledc.channel(ledc::channel::Number::Channel1, peripherals.GPIO8);
-    let mut motor1 = BrushlessESC::new(&mut channel1, &lstimer0, 2000, 1000, 1000);
+    let mut steer_motor2 = ESCB::new(
+        &mut channel1,
+        gpio::Output::new(peripherals.GPIO10, gpio::Level::Low),
+        &lstimer0,
+    );
 
     let mut channel2 = ledc.channel(ledc::channel::Number::Channel2, peripherals.GPIO18);
-    let mut motor2 = BrushlessESC::new(&mut channel2, &lstimer0, 2000, 1000, 1000);
+    let mut steer_motor3 = ESCB::new(
+        &mut channel2,
+        gpio::Output::new(peripherals.GPIO11, gpio::Level::Low),
+        &lstimer0,
+    );
 
     let mut channel3 = ledc.channel(ledc::channel::Number::Channel3, peripherals.GPIO15);
-    let mut motor3 = BrushlessESC::new(&mut channel3, &lstimer0, 2000, 1000, 1000);
+    let mut steer_motor4 = ESCB::new(
+        &mut channel3,
+        gpio::Output::new(peripherals.GPIO12, gpio::Level::Low),
+        &lstimer0,
+    );
+
+    // Drive motors
 
     let mut channel4 = ledc.channel(ledc::channel::Number::Channel4, peripherals.GPIO7);
-    let mut motor4 = BrushlessESC::new(&mut channel4, &lstimer0, 2000, 1000, 1000);
+    let mut drive_motor1 = BrushlessESC::new(&mut channel4, &lstimer0, 2000, 1000, 1000);
 
     let mut channel5 = ledc.channel(ledc::channel::Number::Channel5, peripherals.GPIO6);
-    let mut motor5 = BrushlessESC::new(&mut channel5, &lstimer0, 2000, 1000, 1000);
+    let mut drive_motor2 = BrushlessESC::new(&mut channel5, &lstimer0, 2000, 1000, 1000);
 
     let mut channel6 = ledc.channel(ledc::channel::Number::Channel6, peripherals.GPIO5);
-    let mut motor6 = BrushlessESC::new(&mut channel6, &lstimer0, 2000, 1000, 1000);
+    let mut drive_motor3 = BrushlessESC::new(&mut channel6, &lstimer0, 2000, 1000, 1000);
 
     let mut channel7 = ledc.channel(ledc::channel::Number::Channel7, peripherals.GPIO4);
-    let mut motor7 = BrushlessESC::new(&mut channel7, &lstimer0, 2000, 1000, 1000);
+    let mut drive_motor4 = BrushlessESC::new(&mut channel7, &lstimer0, 2000, 1000, 1000);
 
     // Wifi AP setup
 
@@ -154,31 +175,31 @@ async fn main(spawner: Spawner) -> ! {
     // let mut test_dev = I2cDevice::new(i2cbus);
 
     let mut steer1_pid = PIDController::new(PIDConstants {
-        kp: 1.9,
-        ki: 0.2,
-        kd: 0.2,
+        kp: 50.0,
+        ki: 0.1,
+        kd: 0.1,
     });
     let mut steer2_pid = PIDController::new(PIDConstants {
-        kp: 0.1,
-        ki: 0.0,
+        kp: 50.0,
+        ki: 0.1,
         kd: 0.1,
     });
     let mut steer3_pid = PIDController::new(PIDConstants {
-        kp: 0.1,
-        ki: 0.0,
+        kp: 50.0,
+        ki: 0.1,
         kd: 0.1,
     });
     let mut steer4_pid = PIDController::new(PIDConstants {
-        kp: 0.1,
-        ki: 0.0,
+        kp: 50.0,
+        ki: 0.1,
         kd: 0.1,
     });
 
-    let mut module1 = SwerveModule::new(motor1, motor0, encoder_a, steer1_pid);
-    let mut module2 = SwerveModule::new(motor3, motor2, encoder_b, steer2_pid);
-    let mut module3 = SwerveModule::new(motor5, motor4, encoder_c, steer3_pid);
-    let mut module4 = SwerveModule::new(motor7, motor6, encoder_d, steer4_pid);
-    
+    let mut module1 = SwerveModule::new(drive_motor1, steer_motor1, encoder_a, steer1_pid);
+    let mut module2 = SwerveModule::new(drive_motor2, steer_motor2, encoder_b, steer2_pid);
+    let mut module3 = SwerveModule::new(drive_motor3, steer_motor3, encoder_c, steer3_pid);
+    let mut module4 = SwerveModule::new(drive_motor4, steer_motor4, encoder_d, steer4_pid);
+
     loop {
         // pair loop
         info!("[ESP-NOW] Pairing loop started...");
@@ -286,7 +307,7 @@ async fn main(spawner: Spawner) -> ! {
                     module2.set_angle(steer_angle);
                     module3.set_angle(steer_angle);
                     module4.set_angle(steer_angle);
-                    
+
                     publish_value!("steer_angle_1", module1.get_angle().await);
                     publish_value!("steer_angle_2", module2.get_angle().await);
                     publish_value!("steer_angle_3", module3.get_angle().await);

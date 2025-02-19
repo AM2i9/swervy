@@ -4,14 +4,14 @@ use esp_hal::time;
 
 use crate::{
     encoder::MuxedEncoder,
-    esc::BrushlessESC,
+    esc::{BrushlessESC, ESCB},
     pid::PIDController,
-    util::{deadzone, signum},
+    util::deadzone,
 };
 
 pub struct SwerveModule<'a> {
     drive: BrushlessESC<'a>,
-    steer: BrushlessESC<'a>,
+    steer: ESCB<'a>,
     encoder: MuxedEncoder<'a>,
     pid: PIDController,
     wheelspeed: f32,
@@ -20,7 +20,7 @@ pub struct SwerveModule<'a> {
 impl<'a> SwerveModule<'a> {
     pub fn new(
         drive: BrushlessESC<'a>,
-        steer: BrushlessESC<'a>,
+        steer: ESCB<'a>,
         encoder: MuxedEncoder<'a>,
         pid: PIDController,
     ) -> Self {
@@ -62,12 +62,11 @@ impl<'a> SwerveModule<'a> {
 
     pub fn arm(&mut self) {
         self.drive.arm_sig();
-        self.steer.arm_sig();
     }
 
     pub fn center_throttles(&mut self) {
         self.drive.set_throttle_pct(50);
-        self.drive.set_throttle_pct(50);
+        self.steer.set_throttle_pct(0.0);
     }
 
     pub async fn periodic(&mut self) {
@@ -97,9 +96,10 @@ impl<'a> SwerveModule<'a> {
         }
 
         let pid_out = self.pid.calculate(measurement, Some(timestamp));
-        let steer_out = 50.0 - ((8.0 * signum(pid_out)) + pid_out);
+        let steer_out = pid_out;
 
-        self.drive.set_throttle_pct((50.0 + (4.0 * self.wheelspeed * drive_dir)) as u8);
-        self.steer.set_throttle_pct(steer_out as u8);
+        self.drive
+            .set_throttle_pct((50.0 + (20.0 * self.wheelspeed * drive_dir)) as u8);
+        self.steer.set_throttle_pct(steer_out);
     }
 }
