@@ -212,10 +212,10 @@ async fn main(spawner: Spawner) -> ! {
         info!("[ESP-NOW] Paired with {:?}", remote_address);
 
         info!("[ENC] Zeroing encoders...");
-        module1.zero();
-        module2.zero();
-        module3.zero();
-        module4.zero();
+        module1.zero().await;
+        module2.zero().await;
+        module3.zero().await;
+        module4.zero().await;
 
         info!("[ESC] Arming...");
         module1.disable();
